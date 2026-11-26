@@ -6,6 +6,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
+import { WebhooksModule } from './webhooks/webhooks.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -27,13 +29,17 @@ import { AppService } from './app.service';
 
         autoLoadEntities: true,
         synchronize: false,
+
         retryAttempts: 5,
         retryDelay: 3000,
       }),
     }),
+
+    WebhooksModule,
   ],
 
   controllers: [AppController],
+
   providers: [AppService],
 })
 export class AppModule {}
