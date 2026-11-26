@@ -21,7 +21,7 @@
             // 1. Verify that this worker still owns the event.
             const events = await manager.query(
             `
-            SELECT event_id, payload
+            SELECT event_id, payload, attempts
             FROM webhook_events
             WHERE event_id = $1
                 AND status = 'processing'
@@ -64,7 +64,23 @@
             [orderId, eventId],
             );
     
-            // 4. Mark the event as completed.
+            // 4. Close the attempt record as successful (same transaction as the
+            // business row, so history can never disagree with processed_orders).
+            await manager.query(
+            `
+            UPDATE processing_attempts
+            SET
+                finished_at = NOW(),
+                result = 'success',
+                error = NULL
+            WHERE event_id = $1
+                AND attempt_number = $2
+                AND result = 'running'
+            `,
+            [eventId, events[0].attempts],
+            );
+
+            // 5. Mark the event as completed.
             await manager.query(
             `
             UPDATE webhook_events

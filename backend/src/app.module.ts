@@ -8,6 +8,7 @@ import { AppService } from './app.service';
 
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WorkersModule } from './workers/workers.module';
+import { EventsModule } from './events/events.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { WorkersModule } from './workers/workers.module';
 
     WebhooksModule,
     WorkersModule,
+    EventsModule,
   ],
 
   controllers: [AppController],

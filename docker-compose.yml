@@ -1,27 +1,100 @@
+# Start everything with:  docker compose up --build
+#
+#   postgres  -> database
+#   migrate   -> one-shot: applies DB migrations, then exits
+#   api       -> NestJS HTTP API (no background worker)
+#   worker-1  -> background worker (own container, own WORKER_ID)
+#   worker-2  -> background worker (own container, own WORKER_ID)
+#   frontend  -> Next.js operations page
+
+x-backend: &backend
+  build:
+    context: ./backend
+  image: surpluss-backend:local
+  restart: unless-stopped
+  environment: &backend-env
+    NODE_ENV: production
+    DATABASE_HOST: postgres
+    DATABASE_PORT: "5432"
+    DATABASE_USERNAME: postgres
+    DATABASE_PASSWORD: postgres
+    DATABASE_NAME: webhook_processor
+    MAX_ATTEMPTS: ${MAX_ATTEMPTS:-5}
+    WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-30}
+    WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-1000}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
 
 services:
   postgres:
     image: postgres:16
     container_name: surpluss-postgres
-
     restart: unless-stopped
-
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: webhook_processor
-
     ports:
       - "5432:5432"
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d webhook_processor"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["node", "dist/database/run-migrations.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    container_name: surpluss-api
+    command: ["node", "dist/main"]
+    environment:
+      <<: *backend-env
+      PORT: "3001"
+      WORKER_ENABLED: "false"
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+    ports:
+      - "${API_PORT:-3001}:3001"
+
+  worker-1:
+    <<: *backend
+    container_name: surpluss-worker-1
+    command: ["node", "dist/worker"]
+    environment:
+      <<: *backend-env
+      WORKER_ENABLED: "true"
+      WORKER_ID: worker-1
+
+  worker-2:
+    <<: *backend
+    container_name: surpluss-worker-2
+    command: ["node", "dist/worker"]
+    environment:
+      <<: *backend-env
+      WORKER_ENABLED: "true"
+      WORKER_ID: worker-2
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # URL of the API as seen from the user's BROWSER (not the container network).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api}
+    container_name: surpluss-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
 
 volumes:
   postgres_data:

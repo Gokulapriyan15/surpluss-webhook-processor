@@ -62,8 +62,10 @@ import {
     private async run(): Promise<void> {
       while (this.running && !this.stopping) {
         try {
+          await this.failExhaustedEvents();
+
           const event = await this.claimEvent();
-  
+
           if (!event) {
             await this.sleep(this.pollIntervalMs);
             continue;
@@ -81,6 +83,59 @@ import {
       }
     }
   
+    /**
+     * Crash recovery for the last attempt.
+     *
+     * claimEvent() only picks events with attempts < max_attempts. If a worker
+     * dies during the FINAL attempt, the event would sit in `processing`
+     * forever. Any expired-lease event with no attempts left is therefore
+     * moved to `failed` here (and its dangling attempt record is closed).
+     */
+    private async failExhaustedEvents(): Promise<void> {
+      const rows = await this.queryRows<{ event_id: string }>(
+        `
+        WITH expired AS (
+          UPDATE webhook_events
+          SET
+            status = 'failed',
+            next_retry_at = NULL,
+            locked_by = NULL,
+            lease_until = NULL,
+            lease_token = NULL,
+            updated_at = NOW()
+          WHERE id IN (
+            SELECT id
+            FROM webhook_events
+            WHERE status = 'processing'
+              AND lease_until <= NOW()
+              AND attempts >= max_attempts
+            FOR UPDATE SKIP LOCKED
+          )
+          RETURNING event_id, attempts
+        ),
+        closed AS (
+          UPDATE processing_attempts AS attempt
+          SET
+            finished_at = NOW(),
+            result = 'failed',
+            error = 'Lease expired on the final attempt (worker crashed or stalled)'
+          FROM expired
+          WHERE attempt.event_id = expired.event_id
+            AND attempt.result = 'running'
+          RETURNING attempt.id
+        )
+        SELECT event_id FROM expired
+        `,
+        [],
+      );
+
+      for (const row of rows) {
+        this.logger.warn(
+          `${row.event_id} permanently failed: lease expired on final attempt`,
+        );
+      }
+    }
+
     /**
      * Atomically claims one available event.
      * SKIP LOCKED allows multiple workers to claim different events.
@@ -112,23 +167,57 @@ import {
           ORDER BY created_at ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1
+        ),
+        claimed AS (
+          UPDATE webhook_events AS event
+          SET
+            status = 'processing',
+            attempts = event.attempts + 1,
+            locked_by = $1::varchar,
+            lease_until = NOW() + ($2 * INTERVAL '1 second'),
+            lease_token = $3,
+            updated_at = NOW()
+          FROM candidate
+          WHERE event.id = candidate.id
+          RETURNING
+            event.event_id,
+            event.payload,
+            event.attempts,
+            event.max_attempts,
+            event.lease_token
+        ),
+        -- A re-claimed event means the previous attempt never finished
+        -- (worker crashed or stalled past its lease). Close it out.
+        closed_stale AS (
+          UPDATE processing_attempts AS attempt
+          SET
+            finished_at = NOW(),
+            result = 'failed',
+            error = 'Lease expired before the attempt finished (worker crashed or stalled)'
+          FROM claimed
+          WHERE attempt.event_id = claimed.event_id
+            AND attempt.result = 'running'
+          RETURNING attempt.id
+        ),
+        new_attempt AS (
+          INSERT INTO processing_attempts (
+            event_id,
+            attempt_number,
+            worker_id,
+            started_at,
+            result
+          )
+          SELECT event_id, attempts, $1::varchar, NOW(), 'running'
+          FROM claimed
+          RETURNING id
         )
-        UPDATE webhook_events AS event
-        SET
-          status = 'processing',
-          attempts = event.attempts + 1,
-          locked_by = $1,
-          lease_until = NOW() + ($2 * INTERVAL '1 second'),
-          lease_token = $3,
-          updated_at = NOW()
-        FROM candidate
-        WHERE event.id = candidate.id
-        RETURNING
-          event.event_id,
-          event.payload,
-          event.attempts,
-          event.max_attempts,
-          event.lease_token
+        SELECT
+          event_id,
+          payload,
+          attempts,
+          max_attempts,
+          lease_token
+        FROM claimed
         `,
         [this.workerId, this.leaseSeconds, leaseToken],
       );
@@ -267,24 +356,38 @@ import {
       const isPermanentlyFailed =
         event.attempts >= event.max_attempts;
   
+      // One statement => the event transition and the attempt record
+      // either both happen or neither does.
       await this.dataSource.query(
         `
-        UPDATE webhook_events
+        WITH updated AS (
+          UPDATE webhook_events
+          SET
+            status = $1::varchar,
+            next_retry_at = CASE
+              WHEN $1::varchar = 'retrying'
+              THEN NOW() + ($2 * INTERVAL '1 second')
+              ELSE NULL
+            END,
+            locked_by = NULL,
+            lease_until = NULL,
+            lease_token = NULL,
+            updated_at = NOW()
+          WHERE event_id = $3
+            AND status = 'processing'
+            AND locked_by = $4
+            AND lease_token = $5
+          RETURNING event_id, attempts
+        )
+        UPDATE processing_attempts AS attempt
         SET
-          status = $1::varchar,
-          next_retry_at = CASE
-            WHEN $1::varchar = 'retrying'
-            THEN NOW() + ($2 * INTERVAL '1 second')
-            ELSE NULL
-          END,
-          locked_by = NULL,
-          lease_until = NULL,
-          lease_token = NULL,
-          updated_at = NOW()
-        WHERE event_id = $3
-          AND status = 'processing'
-          AND locked_by = $4
-          AND lease_token = $5
+          finished_at = NOW(),
+          result = 'failed',
+          error = $6
+        FROM updated
+        WHERE attempt.event_id = updated.event_id
+          AND attempt.attempt_number = updated.attempts
+          AND attempt.result = 'running'
         `,
         [
           isPermanentlyFailed ? 'failed' : 'retrying',
@@ -292,6 +395,7 @@ import {
           event.event_id,
           this.workerId,
           event.lease_token,
+          errorMessage,
         ],
       );
   

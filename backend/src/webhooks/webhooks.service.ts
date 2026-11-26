@@ -1,6 +1,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 
 import { WebhookEvent } from '../events/entities/webhook-event.entity';
@@ -13,7 +14,15 @@ export class WebhooksService {
   constructor(
     @InjectRepository(WebhookEvent)
     private readonly webhookRepository: Repository<WebhookEvent>,
+    private readonly configService: ConfigService,
   ) {}
+
+  /** Retry budget given to every new event (env: MAX_ATTEMPTS, default 5). */
+  private get maxAttempts(): number {
+    const value = Number(this.configService.get('MAX_ATTEMPTS') ?? 5);
+
+    return Number.isInteger(value) && value >= 1 ? value : 5;
+  }
 
   async receiveWebhook(dto: CreateWebhookDto) {
     // Preserve the original complete webhook payload.
@@ -34,7 +43,7 @@ export class WebhooksService {
 
         status: WebhookEventStatus.PENDING,
         attempts: 0,
-        maxAttempts: 5,
+        maxAttempts: this.maxAttempts,
       })
       .orIgnore()
       .returning(['id'])

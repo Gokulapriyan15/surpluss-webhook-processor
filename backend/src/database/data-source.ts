@@ -1,7 +1,12 @@
-
 import 'dotenv/config';
 
+import { join } from 'path';
 import { DataSource } from 'typeorm';
+
+// Works both from TypeScript sources (ts-node, `src/`) and from the compiled
+// build (`dist/`, used in Docker): pick the glob extension that matches how
+// this file itself is being executed. `*.js` deliberately excludes `.d.ts`.
+const ext = __filename.endsWith('.ts') ? 'ts' : 'js';
 
 const AppDataSource = new DataSource({
   type: 'postgres',
@@ -13,13 +18,13 @@ const AppDataSource = new DataSource({
   password: process.env.DATABASE_PASSWORD || 'postgres',
   database: process.env.DATABASE_NAME || 'webhook_processor',
 
-  entities: ['src/**/*.entity.ts'],
+  entities: [join(__dirname, '..', '**', `*.entity.${ext}`)],
 
-  migrations: ['src/database/migrations/*.ts'],
+  migrations: [join(__dirname, 'migrations', `*.${ext}`)],
 
   synchronize: false,
 
-  logging: true,
+  logging: ['error', 'migration'],
 });
 
 export default AppDataSource;
