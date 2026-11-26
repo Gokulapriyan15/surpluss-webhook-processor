@@ -14,9 +14,12 @@ describe('AppController', () => {
     appController = app.get<AppController>(AppController);
   });
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+  describe('health', () => {
+    it('reports the API as running', () => {
+      expect(appController.getHealth()).toMatchObject({
+        status: 'success',
+        service: 'backend',
+      });
     });
   });
 });

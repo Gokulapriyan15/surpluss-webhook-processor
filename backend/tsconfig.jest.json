@@ -1,0 +1,13 @@
+{
+  // Used only by ts-jest. NestJS 12 ships ESM-only packages, so the tests run
+  // as native ES modules (`node --experimental-vm-modules`, ts-jest `useESM`).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "resolvePackageJsonExports": true,
+    "rootDir": ".",
+    "declaration": false,
+    "incremental": false
+  }
+}

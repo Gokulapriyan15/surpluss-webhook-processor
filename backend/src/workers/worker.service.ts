@@ -9,7 +9,7 @@ import {
   import { randomUUID } from 'crypto';
   import { BusinessCompletionService } from './business-completion.service';
   
-  interface ClaimedEvent {
+  export interface ClaimedEvent {
     event_id: string;
     payload: Record<string, any>;
     attempts: number;
@@ -91,7 +91,7 @@ import {
      * forever. Any expired-lease event with no attempts left is therefore
      * moved to `failed` here (and its dangling attempt record is closed).
      */
-    private async failExhaustedEvents(): Promise<void> {
+    async failExhaustedEvents(): Promise<void> {
       const rows = await this.queryRows<{ event_id: string }>(
         `
         WITH expired AS (
@@ -140,7 +140,7 @@ import {
      * Atomically claims one available event.
      * SKIP LOCKED allows multiple workers to claim different events.
      */
-    private async claimEvent(): Promise<ClaimedEvent | null> {
+    async claimEvent(): Promise<ClaimedEvent | null> {
       const leaseToken = randomUUID();
   
       const rows = await this.queryRows<ClaimedEvent>(
@@ -225,7 +225,7 @@ import {
       return rows.length > 0 ? rows[0] : null;
     }
   
-    private async processEvent(event: ClaimedEvent): Promise<void> {
+    async processEvent(event: ClaimedEvent): Promise<void> {
       this.logger.log(
         `Processing ${event.event_id}, attempt ${event.attempts}`,
       );
@@ -429,8 +429,20 @@ import {
       return raw as T[];
     }
 
-    private sleep(ms: number): Promise<void> {
-      return new Promise((resolve) => setTimeout(resolve, ms));
+    /**
+     * setTimeout overflows (and fires immediately) above 2^31-1 ms, which would
+     * make a huge `slow:N` finish instantly. Sleep in bounded chunks instead.
+     */
+    private async sleep(ms: number): Promise<void> {
+      const MAX_CHUNK_MS = 1_000_000_000;
+      let remaining = ms;
+
+      while (remaining > 0) {
+        const chunk = Math.min(remaining, MAX_CHUNK_MS);
+
+        await new Promise<void>((resolve) => setTimeout(resolve, chunk));
+        remaining -= chunk;
+      }
     }
   }
   

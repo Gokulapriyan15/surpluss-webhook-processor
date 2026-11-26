@@ -13,9 +13,24 @@ const paths = tsconfig?.compilerOptions?.paths ?? {};
 const config: Config = {
   moduleFileExtensions: ['js', 'json', 'ts'],
   rootDir: '.',
+  roots: ['<rootDir>/src', '<rootDir>/test'],
   testRegex: '.*\\.spec\\.ts$',
+
+  // Integration tests share one Postgres test database, so run serially.
+  maxWorkers: 1,
+  testTimeout: 30000,
+
+  // Points the app at the test database and disables the in-process worker.
+  setupFiles: ['<rootDir>/test/setup-env.ts'],
+
+  // NestJS 12 packages are ESM-only, so the tests run as native ES modules.
+  // This needs `node --experimental-vm-modules` (see the "test" npm script).
+  extensionsToTreatAsEsm: ['.ts'],
   transform: {
-    '^.+\\.(t|j)s$': 'ts-jest',
+    '^.+\\.ts$': [
+      'ts-jest',
+      { useESM: true, tsconfig: 'tsconfig.jest.json' },
+    ],
   },
   moduleNameMapper: pathsToModuleNameMapper(paths, { prefix: '<rootDir>/' }),
   collectCoverageFrom: [
