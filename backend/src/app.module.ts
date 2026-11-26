@@ -7,6 +7,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { WorkersModule } from './workers/workers.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     }),
 
     WebhooksModule,
+    WorkersModule,
   ],
 
   controllers: [AppController],
